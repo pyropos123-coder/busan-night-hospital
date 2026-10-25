@@ -26,6 +26,10 @@ h1{margin:0;font-size:22px}
 .info b{font-size:15px}
 .tag{display:inline-block;color:#fff;border-radius:5px;padding:0 7px;font-size:12px;margin:2px 0}
 .foot{padding:6px 16px;font-size:12px;color:var(--mute)}
+.grp{position:sticky;top:0;padding:5px 14px;font-size:12px;font-weight:700;background:#ece6d2;color:var(--mute)}
+.dist{float:right;font-size:12px}
+.chip.near{border-style:dashed}
+.me{width:16px;height:16px;border-radius:50%;background:#1a73e8;border:3px solid #fff;box-shadow:0 0 0 6px #1a73e833}
 @media(max-width:760px){.wrap{grid-template-columns:1fr;grid-template-rows:55% 45%}#list{order:2;border-right:0;border-top:2px solid var(--ink)}}
 </style>
 </head>
@@ -75,6 +79,7 @@ var FALLBACK_ER = [
   {name:"대동병원", q:"부산 대동병원", type:"er2", note:"지역응급의료센터"}
 ];
 
+var ORDER = ["er","er2","kid","night","er3"], user = null, near = false;
 var HOSPITALS = [], updated = "", map, places, infoWin, overlays = {}, filter = "all", selected = null;
 
 var s = document.createElement("script");
@@ -137,23 +142,48 @@ function locate(h){
 
 function pinEl(color){ var d = document.createElement("div"); d.className = "pin"; d.style.background = color; return d; }
 
+function km(a, b){
+  var t = Math.PI/180, dl = (b.getLat()-a.getLat())*t, dn = (b.getLng()-a.getLng())*t;
+  var x = Math.pow(Math.sin(dl/2),2) + Math.cos(a.getLat()*t)*Math.cos(b.getLat()*t)*Math.pow(Math.sin(dn/2),2);
+  return 12742*Math.asin(Math.sqrt(x));
+}
+var CITY = null;
+
 function render(fit){
   Object.keys(overlays).forEach(function(k){ overlays[k].setMap(null) }); overlays = {};
   var list = document.getElementById("list"); list.innerHTML = "";
-  var bounds = new kakao.maps.LatLngBounds(), n = 0;
-  HOSPITALS.forEach(function(h,i){
-    if(!h.pos || (filter !== "all" && h.type !== filter)) return;
+  CITY = CITY || new kakao.maps.LatLng(35.1796,129.0756);
+  var idx = [];
+  HOSPITALS.forEach(function(h,i){ if(h.pos && (filter === "all" || h.type === filter)) idx.push(i) });
+  var useNear = near && user;
+  if(useNear) idx.forEach(function(i){ HOSPITALS[i].d = km(user, HOSPITALS[i].pos) });
+  idx.sort(function(a,b){
+    var x = HOSPITALS[a], y = HOSPITALS[b];
+    if(useNear) return x.d - y.d;
+    return (ORDER.indexOf(x.type) - ORDER.indexOf(y.type)) || x.name.localeCompare(y.name, "ko");
+  });
+  var bounds = new kakao.maps.LatLngBounds(), last = "";
+  idx.forEach(function(i){
+    var h = HOSPITALS[i];
+    if(!useNear && filter === "all" && h.type !== last){
+      last = h.type;
+      var g = document.createElement("div"); g.className = "grp"; g.textContent = TYPES[h.type].label; list.appendChild(g);
+    }
     var el = pinEl(TYPES[h.type].color); el.onclick = function(){ pick(i) };
     var ov = new kakao.maps.CustomOverlay({position:h.pos, content:el, yAnchor:1});
-    ov.setMap(map); overlays[i] = ov; bounds.extend(h.pos); n++;
+    ov.setMap(map); overlays[i] = ov; bounds.extend(h.pos);
     var b = document.createElement("button"); b.className = "row" + (i === selected ? " on" : "");
     b.innerHTML = "<b></b><small></small>";
     b.firstChild.textContent = h.name;
+    if(useNear){ var d = document.createElement("span"); d.className = "dist"; d.textContent = h.d.toFixed(1) + "km"; b.firstChild.appendChild(d) }
     b.lastChild.textContent = TYPES[h.type].label + " · " + (h.addr || "");
     b.onclick = function(){ pick(i) };
     list.appendChild(b);
   });
-  if(fit && n) map.setBounds(bounds);
+  if(fit){
+    if(useNear && km(user, CITY) < 60){ map.setLevel(6); map.setCenter(user) }
+    else if(idx.length) map.setBounds(bounds);
+  }
 }
 
 function pick(i){
@@ -171,6 +201,8 @@ function pick(i){
   map.panTo(h.pos); render(false);
 }
 
+function setStatus(t){ document.getElementById("status").textContent = t }
+
 function drawChips(){
   var c = document.getElementById("chips"); c.innerHTML = "";
   [["all","전체",null]].concat(Object.keys(TYPES).map(function(k){ return [k, TYPES[k].label, TYPES[k].color] })).forEach(function(x){
@@ -180,6 +212,24 @@ function drawChips(){
     b.onclick = function(){ filter = x[0]; selected = null; infoWin.close(); drawChips(); render(true) };
     c.appendChild(b);
   });
+  var nb = document.createElement("button"); nb.className = "chip near"; nb.setAttribute("aria-pressed", near);
+  nb.textContent = near ? "종류별로 보기" : "📍 내 위치에서 가까운 순";
+  nb.title = "내 위치는 이 브라우저 안에서만 쓰이고 저장되거나 전송되지 않아요";
+  nb.onclick = toggleNear; c.appendChild(nb);
+}
+
+function toggleNear(){
+  if(near){ near = false; drawChips(); render(false); return }
+  if(user){ near = true; drawChips(); render(true); return }
+  if(!navigator.geolocation){ setStatus("이 브라우저에서는 위치를 쓸 수 없어요."); return }
+  setStatus("내 위치를 확인하는 중…");
+  navigator.geolocation.getCurrentPosition(function(p){
+    user = new kakao.maps.LatLng(p.coords.latitude, p.coords.longitude);
+    var d = document.createElement("div"); d.className = "me";
+    new kakao.maps.CustomOverlay({position:user, content:d, yAnchor:0.5}).setMap(map);
+    near = true; setStatus(HOSPITALS.filter(function(h){return h.pos}).length + "곳 표시 · 가까운 순");
+    drawChips(); render(true);
+  }, function(){ setStatus("위치 권한을 허용하면 가까운 순으로 볼 수 있어요.") }, {timeout:10000});
 }
 </script>
 </body>
