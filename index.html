@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>부산 야간 병원 지도</title>
+<style>
+:root{--ink:#23224a;--bg:#fbf6e9;--mute:#5d5c80}
+*{box-sizing:border-box}
+body{margin:0;font-family:"Apple SD Gothic Neo","Malgun Gothic",sans-serif;color:var(--ink);background:var(--bg)}
+header{padding:14px 16px 4px}
+h1{margin:0;font-size:22px}
+.sub{margin:2px 0 0;font-size:13px;color:var(--mute)}
+.chips{display:flex;gap:8px;flex-wrap:wrap;padding:8px 16px 10px}
+.chip{border:2px solid var(--ink);background:transparent;color:var(--ink);border-radius:999px;padding:5px 12px;font:inherit;cursor:pointer;display:flex;align-items:center;gap:6px}
+.chip[aria-pressed="true"]{background:var(--ink);color:var(--bg)}
+.chip i{width:10px;height:10px;border-radius:50%;display:inline-block}
+.wrap{display:grid;grid-template-columns:340px 1fr;height:calc(100vh - 140px)}
+#list{overflow:auto;border-right:2px solid var(--ink)}
+.row{display:block;width:100%;text-align:left;border:0;border-bottom:1px solid #0002;background:none;color:inherit;font:inherit;padding:10px 14px;cursor:pointer}
+.row small{display:block;color:var(--mute)}
+.row:hover,.row.on{background:#23224a14}
+#map{width:100%;height:100%}
+.pin{width:26px;height:26px;border-radius:50% 50% 50% 0;transform:rotate(-45deg);border:3px solid #fff;box-shadow:0 1px 4px #0006;cursor:pointer}
+.info{padding:10px 12px;font-size:13px;line-height:1.55;min-width:230px;max-width:280px}
+.info b{font-size:15px}
+.tag{display:inline-block;color:#fff;border-radius:5px;padding:0 7px;font-size:12px;margin:2px 0}
+.foot{padding:6px 16px;font-size:12px;color:var(--mute)}
+@media(max-width:760px){.wrap{grid-template-columns:1fr;grid-template-rows:55% 45%}#list{order:2;border-right:0;border-top:2px solid var(--ink)}}
+</style>
+</head>
+<body>
+<header>
+  <h1>부산 야간 병원 지도</h1>
+  <p class="sub" id="status">병원 위치를 찾는 중…</p>
+</header>
+<div class="chips" id="chips"></div>
+<div class="wrap"><div id="list"></div><div id="map"></div></div>
+<div class="foot">진료 시간은 바뀔 수 있으니 방문 전에 병원에 꼭 확인하세요. 응급 상황에서는 119에 먼저 연락하세요.<br>
+응급의료기관: 국립중앙의료원 공공데이터(매주 자동 갱신) · 달빛어린이병원·취약지 소아 진료기관: 부산시 안내(2026년 10월 기준) 직접 정리</div>
+<script src="config.js"></script>
+<script>
+var TYPES = {
+  er:    {label:"권역응급의료센터", color:"#d62828"},
+  er2:   {label:"지역응급의료센터", color:"#f77f00"},
+  er3:   {label:"지역응급의료기관", color:"#577590"},
+  kid:   {label:"달빛어린이병원",   color:"#2a9d8f"},
+  night: {label:"취약지 소아 야간·휴일 진료", color:"#6c5ce7"}
+};
+/* 직접 관리하는 목록 (달빛어린이병원·취약지 소아 진료기관). 바뀌면 여기를 고치세요. */
+var MANUAL = [
+  {name:"정관우리아동병원", q:"부산 정관우리아동병원", type:"kid", note:"기장군 · 부산시 안내 기준 24시간 진료"},
+  {name:"아이사랑병원", q:"부산 연제구 아이사랑병원", type:"kid", note:"연제구 · 진료 시간은 병원에 확인"},
+  {name:"99서울소아청소년과의원", q:"부산 동래구 99서울소아청소년과의원", type:"kid", note:"동래구 · 진료 시간은 병원에 확인"},
+  {name:"아이서울병원", q:"부산 영도구 아이서울병원", type:"kid", note:"영도구 · 진료 시간은 병원에 확인"},
+  {name:"부산더키즈병원", q:"부산 사하구 부산더키즈병원", type:"kid", note:"사하구 · 진료 시간은 병원에 확인"},
+  {name:"해운대푸른바다병원", q:"부산 해운대푸른바다병원", type:"kid", note:"해운대구 · 진료 시간은 병원에 확인"},
+  {name:"금정소아청소년과의원", q:"부산 금정소아청소년과의원", type:"kid", note:"금정구 · 진료 시간은 병원에 확인"},
+  {name:"명지아동병원", q:"부산 강서구 명지아동병원", type:"kid", note:"강서구 · 평일 ~23시, 토·일·공휴일 09~18시"},
+  {name:"행복한어린이병원", q:"부산 강서구 행복한어린이병원", type:"kid", note:"강서구 · 평일 ~23시, 토·일·공휴일 09~18시"},
+  {name:"일신기독병원", q:"부산 동구 일신기독병원", type:"night", note:"동구 · 화·수·금 18~23시"},
+  {name:"아이러브소아청소년과의원", q:"부산 부산진구 아이러브소아청소년과의원", type:"night", note:"부산진구 · 2026.7.27 운영 시작"},
+  {name:"남은소아청소년과의원", q:"부산 북구 남은소아청소년과의원", type:"night", note:"북구 · 2026.8.3 운영 시작"}
+];
+/* emergency.json 을 못 읽을 때만 쓰는 예비 목록 */
+var FALLBACK_ER = [
+  {name:"동아대학교병원", q:"부산 동아대학교병원", type:"er", note:"권역응급의료센터"},
+  {name:"해운대백병원", q:"부산 해운대백병원", type:"er", note:"권역응급의료센터"},
+  {name:"부산대학교병원", q:"부산 부산대학교병원", type:"er2", note:"지역응급의료센터"},
+  {name:"인제대 부산백병원", q:"부산 인제대학교 부산백병원", type:"er2", note:"지역응급의료센터 · 2026년 11월부터 권역"},
+  {name:"고신대복음병원", q:"부산 고신대학교복음병원", type:"er2", note:"지역응급의료센터"},
+  {name:"온병원", q:"부산 온병원", type:"er2", note:"지역응급의료센터"},
+  {name:"BHS한서병원", q:"부산 BHS한서병원", type:"er2", note:"지역응급의료센터"},
+  {name:"좋은삼선병원", q:"부산 좋은삼선병원", type:"er2", note:"지역응급의료센터"},
+  {name:"대동병원", q:"부산 대동병원", type:"er2", note:"지역응급의료센터"}
+];
+
+var HOSPITALS = [], updated = "", map, places, infoWin, overlays = {}, filter = "all", selected = null;
+
+var s = document.createElement("script");
+s.src = "//dapi.kakao.com/v2/maps/sdk.js?appkey=" + (typeof KAKAO_KEY === "undefined" ? "" : KAKAO_KEY) + "&libraries=services&autoload=false";
+s.onload = function(){ kakao.maps.load(init) };
+s.onerror = function(){ document.getElementById("status").textContent = "카카오 지도를 불러오지 못했어요. config.js 의 키와 도메인 등록을 확인하세요." };
+document.head.appendChild(s);
+
+function erType(c){
+  if(c.indexOf("권역") >= 0) return "er";
+  if(c.indexOf("지역응급의료센터") >= 0) return "er2";
+  return "er3";
+}
+function toER(it){
+  var ok = it.lat > 33 && it.lat < 36 && it.lon > 128 && it.lon < 130;
+  return {
+    name: it.name, q: "부산 " + it.name, type: erType(it.emcls || ""),
+    note: (it.emcls || "응급의료기관") + (it.tel3 ? " · 응급실 " + it.tel3 : ""),
+    addr: it.addr, phone: it.tel,
+    pos: ok ? new kakao.maps.LatLng(it.lat, it.lon) : null
+  };
+}
+
+function init(){
+  map = new kakao.maps.Map(document.getElementById("map"), {center:new kakao.maps.LatLng(35.1796,129.0756), level:8});
+  infoWin = new kakao.maps.InfoWindow({removable:true});
+  places = new kakao.maps.services.Places();
+  drawChips();
+  fetch("emergency.json?v=" + Date.now())
+    .then(function(r){ return r.ok ? r.json() : Promise.reject() })
+    .then(function(d){ updated = d.updated || ""; return d.items.map(toER) })
+    .catch(function(){ return FALLBACK_ER })
+    .then(function(er){
+      HOSPITALS = er.concat(MANUAL);
+      return Promise.all(HOSPITALS.map(locate));
+    })
+    .then(function(){
+      var n = HOSPITALS.filter(function(h){return h.pos}).length;
+      document.getElementById("status").textContent = n + "곳 표시" + (updated ? " · 응급의료기관 정보 갱신일 " + updated : " · 예비 목록");
+      render(true);
+    });
+}
+
+function locate(h){
+  if(h.pos) return Promise.resolve();
+  return new Promise(function(resolve){
+    places.keywordSearch(h.q, function(data, status){
+      if(status === kakao.maps.services.Status.OK){
+        var p = data.filter(function(d){ return (d.address_name||"").indexOf("부산") === 0 })[0];
+        if(p){
+          h.pos = new kakao.maps.LatLng(p.y, p.x);
+          h.addr = h.addr || p.road_address_name || p.address_name;
+          h.phone = h.phone || p.phone; h.url = p.place_url;
+        }
+      }
+      resolve();
+    });
+  });
+}
+
+function pinEl(color){ var d = document.createElement("div"); d.className = "pin"; d.style.background = color; return d; }
+
+function render(fit){
+  Object.keys(overlays).forEach(function(k){ overlays[k].setMap(null) }); overlays = {};
+  var list = document.getElementById("list"); list.innerHTML = "";
+  var bounds = new kakao.maps.LatLngBounds(), n = 0;
+  HOSPITALS.forEach(function(h,i){
+    if(!h.pos || (filter !== "all" && h.type !== filter)) return;
+    var el = pinEl(TYPES[h.type].color); el.onclick = function(){ pick(i) };
+    var ov = new kakao.maps.CustomOverlay({position:h.pos, content:el, yAnchor:1});
+    ov.setMap(map); overlays[i] = ov; bounds.extend(h.pos); n++;
+    var b = document.createElement("button"); b.className = "row" + (i === selected ? " on" : "");
+    b.innerHTML = "<b></b><small></small>";
+    b.firstChild.textContent = h.name;
+    b.lastChild.textContent = TYPES[h.type].label + " · " + (h.addr || "");
+    b.onclick = function(){ pick(i) };
+    list.appendChild(b);
+  });
+  if(fit && n) map.setBounds(bounds);
+}
+
+function pick(i){
+  selected = i; var h = HOSPITALS[i], t = TYPES[h.type];
+  var box = document.createElement("div"); box.className = "info";
+  var name = document.createElement("b"); name.textContent = h.name;
+  var tag = document.createElement("div"), sp = document.createElement("span");
+  sp.className = "tag"; sp.style.background = t.color; sp.textContent = t.label; tag.appendChild(sp);
+  var note = document.createElement("div"); note.textContent = h.note;
+  var addr = document.createElement("div"); addr.textContent = h.addr || "";
+  box.append(name, tag, note, addr);
+  if(h.phone){ var ph = document.createElement("div"); ph.textContent = "☎ " + h.phone; box.appendChild(ph) }
+  if(h.url){ var a = document.createElement("a"); a.href = h.url; a.target = "_blank"; a.rel = "noopener"; a.textContent = "카카오맵에서 보기"; box.appendChild(a) }
+  infoWin.setContent(box); infoWin.setPosition(h.pos); infoWin.open(map);
+  map.panTo(h.pos); render(false);
+}
+
+function drawChips(){
+  var c = document.getElementById("chips"); c.innerHTML = "";
+  [["all","전체",null]].concat(Object.keys(TYPES).map(function(k){ return [k, TYPES[k].label, TYPES[k].color] })).forEach(function(x){
+    var b = document.createElement("button"); b.className = "chip"; b.setAttribute("aria-pressed", filter === x[0]);
+    if(x[2]){ var d = document.createElement("i"); d.style.background = x[2]; b.appendChild(d) }
+    b.appendChild(document.createTextNode(x[1]));
+    b.onclick = function(){ filter = x[0]; selected = null; infoWin.close(); drawChips(); render(true) };
+    c.appendChild(b);
+  });
+}
+</script>
+</body>
+</html>
